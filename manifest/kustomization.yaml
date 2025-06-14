@@ -1,0 +1,24 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: draftstore
+
+resources:
+- namespace.yaml
+- configmap.yaml
+- secret.yaml
+- deployment.yaml
+- service.yaml
+- cronjob.yaml
+- hpa.yaml
+
+images:
+- name: draftstore-server
+  newTag: latest
+- name: draftstore-cronjob
+  newTag: latest
+
+commonLabels:
+  app.kubernetes.io/name: draftstore
+  app.kubernetes.io/version: v1.0.0
+  app.kubernetes.io/component: backend

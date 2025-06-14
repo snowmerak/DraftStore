@@ -1,0 +1,69 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: draftstore-server
+  namespace: draftstore
+  labels:
+    app: draftstore-server
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: draftstore-server
+  template:
+    metadata:
+      labels:
+        app: draftstore-server
+    spec:
+      containers:
+      - name: server
+        image: draftstore-server:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 50051
+          name: grpc
+          protocol: TCP
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        envFrom:
+        - configMapRef:
+            name: draftstore-config
+        - secretRef:
+            name: aws-credentials
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+            scheme: HTTP
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+            scheme: HTTP
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1000
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+      securityContext:
+        fsGroup: 1000
+      restartPolicy: Always
