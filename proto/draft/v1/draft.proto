@@ -1,0 +1,79 @@
+syntax = "proto3";
+
+package draft.v1;
+
+option go_package = "github.com/snowmerak/DraftStore/gen/draft/v1";
+
+// ErrorType represents different categories of errors that can occur
+enum ErrorType {
+  ERROR_TYPE_UNSPECIFIED = 0;
+  ERROR_TYPE_BUCKET_NOT_FOUND = 1;
+  ERROR_TYPE_OBJECT_NOT_FOUND = 2;
+  ERROR_TYPE_ACCESS_DENIED = 3;
+  ERROR_TYPE_NETWORK_ERROR = 4;
+  ERROR_TYPE_STORAGE_QUOTA_EXCEEDED = 5;
+  ERROR_TYPE_INVALID_OBJECT_NAME = 6;
+  ERROR_TYPE_BUCKET_ALREADY_EXISTS = 7;
+  ERROR_TYPE_COPY_FAILED = 8;
+  ERROR_TYPE_DELETE_FAILED = 9;
+  ERROR_TYPE_PRESIGNED_URL_FAILED = 10;
+  ERROR_TYPE_INTERNAL_ERROR = 11;
+}
+
+// DraftService provides methods for managing draft uploads
+service DraftService {
+  // CreateDraftBucket creates the necessary buckets for draft operations
+  rpc CreateDraftBucket(CreateDraftBucketRequest) returns (CreateDraftBucketResponse);
+  
+  // GetUploadURL generates a presigned URL for uploading files to the draft bucket
+  rpc GetUploadURL(GetUploadURLRequest) returns (GetUploadURLResponse);
+  
+  // GetDownloadURL generates a presigned URL for downloading files from the main bucket
+  rpc GetDownloadURL(GetDownloadURLRequest) returns (GetDownloadURLResponse);
+  
+  // ConfirmUpload moves a file from draft bucket to main bucket
+  rpc ConfirmUpload(ConfirmUploadRequest) returns (ConfirmUploadResponse);
+}
+
+// Common result structure
+message Result {
+  bool success = 1;
+  string error_message = 2;
+  ErrorType error_type = 3;
+}
+
+// CreateDraftBucket messages
+message CreateDraftBucketRequest {}
+
+message CreateDraftBucketResponse {
+  Result result = 1;
+}
+
+// GetUploadURL messages
+message GetUploadURLRequest {
+  string object_name = 1;
+}
+
+message GetUploadURLResponse {
+  Result result = 1;
+  string url = 2;
+}
+
+// GetDownloadURL messages
+message GetDownloadURLRequest {
+  string object_name = 1;
+}
+
+message GetDownloadURLResponse {
+  Result result = 1;
+  string url = 2;
+}
+
+// ConfirmUpload messages
+message ConfirmUploadRequest {
+  string object_name = 1;
+}
+
+message ConfirmUploadResponse {
+  Result result = 1;
+}
