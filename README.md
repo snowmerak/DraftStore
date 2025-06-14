@@ -4,6 +4,135 @@ DraftStore is a cloud-native file upload service that provides a two-stage uploa
 
 ## 🏗️ Architecture
 
+### System Architecture
+
+```mermaid
+graph TB
+    subgraph "Client Layer"
+        WebClient[Web Client]
+        gRPCClient[gRPC Client]
+        MobileApp[Mobile App]
+    end
+    
+    subgraph "Kubernetes Cluster"
+        subgraph "Load Balancer"
+            LB[Load Balancer Service]
+        end
+        
+        subgraph "Application Pods"
+            Server1[Server Pod 1]
+            Server2[Server Pod 2]
+            Server3[Server Pod 3]
+        end
+        
+        subgraph "Background Jobs"
+            CronJob[Cleanup CronJob]
+        end
+        
+        subgraph "Configuration"
+            ConfigMap[ConfigMap]
+            Secret[Secret]
+        end
+    end
+    
+    subgraph "AWS S3"
+        DraftBucket[Draft Bucket]
+        MainBucket[Main Bucket]
+    end
+    
+    WebClient --> LB
+    gRPCClient --> LB
+    MobileApp --> LB
+    
+    LB --> Server1
+    LB --> Server2
+    LB --> Server3
+    
+    Server1 --> DraftBucket
+    Server1 --> MainBucket
+    Server2 --> DraftBucket
+    Server2 --> MainBucket
+    Server3 --> DraftBucket
+    Server3 --> MainBucket
+    
+    CronJob --> DraftBucket
+    
+    ConfigMap --> Server1
+    ConfigMap --> Server2
+    ConfigMap --> Server3
+    ConfigMap --> CronJob
+    
+    Secret --> Server1
+    Secret --> Server2
+    Secret --> Server3
+    Secret --> CronJob
+```
+
+### Component Architecture
+
+```mermaid
+graph TB
+    subgraph "API Layer"
+        gRPCController[gRPC Controller]
+        WebAPIController[Web API Controller]
+    end
+    
+    subgraph "Service Layer"
+        DraftService[Draft Service]
+        CleanerService[Cleaner Service]
+    end
+    
+    subgraph "Storage Layer"
+        StorageInterface[Storage Interface]
+        S3Implementation[S3 Implementation]
+    end
+    
+    subgraph "External"
+        S3Bucket[AWS S3 Buckets]
+    end
+    
+    gRPCController --> DraftService
+    WebAPIController --> DraftService
+    DraftService --> StorageInterface
+    CleanerService --> StorageInterface
+    StorageInterface --> S3Implementation
+    S3Implementation --> S3Bucket
+```
+
+### Use Case Diagram
+
+```mermaid
+graph LR
+    subgraph "Actors"
+        User[User]
+        System[System/Cron]
+    end
+    
+    subgraph "Use Cases"
+        UC1[Get Upload URL]
+        UC2[Upload File to Draft]
+        UC3[Get Download URL]
+        UC4[Download Draft File]
+        UC5[Confirm Upload]
+        UC6[Move to Main Bucket]
+        UC7[Cleanup Expired Files]
+        UC8[Health Check]
+    end
+    
+    User --> UC1
+    User --> UC2
+    User --> UC3
+    User --> UC4
+    User --> UC5
+    UC1 --> UC2
+    UC2 --> UC3
+    UC3 --> UC4
+    UC2 --> UC5
+    UC5 --> UC6
+    System --> UC7
+    System --> UC8
+```
+
 ### Project Structure
 
 ```
@@ -24,6 +153,7 @@ DraftStore/
 ├── cmd/                     # Application entry points
 │   ├── server/             # Main server (gRPC + HTTP)
 │   └── cronjob/            # Cleanup cronjob
+├── manifest/               # Kubernetes manifests
 ├── buf.yaml                # Buf configuration
 ├── buf.gen.yaml            # Code generation configuration
 └── go.mod                  # Go module dependencies
@@ -56,6 +186,188 @@ DraftStore/
 - **Dual APIs**: Both gRPC and REST APIs available
 - **Cloud Native**: Designed for Kubernetes deployment
 - **Storage Agnostic**: Interface-based design allows different storage backends
+
+## 📊 Workflow Diagrams
+
+### Complete Upload Workflow
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant DraftStore
+    participant DraftBucket as Draft S3 Bucket
+    participant MainBucket as Main S3 Bucket
+    
+    Note over Client, MainBucket: Two-Stage Upload Process
+    
+    Client->>DraftStore: 1. Request Upload URL
+    Note right of Client: POST /api/v1/upload-url<br/>{"object_name": "file.jpg"}
+    
+    DraftStore->>DraftBucket: 2. Generate Presigned URL
+    DraftBucket-->>DraftStore: 3. Return Presigned URL
+    DraftStore-->>Client: 4. Return Upload URL + Metadata
+    Note left of DraftStore: {"upload_url": "https://...",<br/>"object_name": "file.jpg",<br/>"expires_at": "2024-01-01T12:00:00Z"}
+    
+    Client->>DraftBucket: 5. Upload File Directly
+    Note right of Client: PUT to presigned URL<br/>with file data
+    DraftBucket-->>Client: 6. Upload Success
+    
+    Client->>DraftStore: 7. Request Download URL (Optional)
+    Note right of Client: POST /api/v1/download-url<br/>{"object_name": "file.jpg"}
+    
+    DraftStore->>DraftBucket: 8. Generate Download URL
+    DraftBucket-->>DraftStore: 9. Return Download URL
+    DraftStore-->>Client: 10. Return Download URL
+    
+    Client->>DraftBucket: 11. Download/Preview File (Optional)
+    DraftBucket-->>Client: 12. File Data
+    
+    Client->>DraftStore: 13. Confirm Upload
+    Note right of Client: POST /api/v1/confirm-upload<br/>{"object_name": "file.jpg"}
+    
+    DraftStore->>DraftBucket: 14. Copy Object
+    DraftStore->>MainBucket: 15. Move to Main Bucket
+    DraftStore->>DraftBucket: 16. Delete from Draft
+    DraftStore-->>Client: 17. Confirmation Success
+    Note left of DraftStore: {"success": true,<br/>"final_location": "main/file.jpg"}
+```
+
+### gRPC Workflow
+
+```mermaid
+sequenceDiagram
+    participant gRPCClient as gRPC Client
+    participant gRPCServer as gRPC Server
+    participant DraftService as Draft Service
+    participant StorageLayer as Storage Layer
+    participant S3 as AWS S3
+    
+    gRPCClient->>gRPCServer: CreateDraftBucket()
+    gRPCServer->>DraftService: CreateBucket()
+    DraftService->>StorageLayer: CreateBucket()
+    StorageLayer->>S3: CreateBucket API
+    S3-->>StorageLayer: Success
+    StorageLayer-->>DraftService: Success
+    DraftService-->>gRPCServer: BucketCreated
+    gRPCServer-->>gRPCClient: CreateDraftBucketResponse
+    
+    gRPCClient->>gRPCServer: GetUploadURL(object_name)
+    gRPCServer->>DraftService: GenerateUploadURL()
+    DraftService->>StorageLayer: GetPresignedURL()
+    StorageLayer->>S3: Generate Presigned URL
+    S3-->>StorageLayer: Presigned URL
+    StorageLayer-->>DraftService: URL + Metadata
+    DraftService-->>gRPCServer: UploadURLResponse
+    gRPCServer-->>gRPCClient: GetUploadURLResponse
+    
+    Note over gRPCClient, S3: Direct upload to S3 (bypassing server)
+    
+    gRPCClient->>gRPCServer: ConfirmUpload(object_name)
+    gRPCServer->>DraftService: ConfirmUpload()
+    DraftService->>StorageLayer: MoveObject()
+    StorageLayer->>S3: Copy + Delete Operations
+    S3-->>StorageLayer: Success
+    StorageLayer-->>DraftService: Success
+    DraftService-->>gRPCServer: UploadConfirmed
+    gRPCServer-->>gRPCClient: ConfirmUploadResponse
+```
+
+### Cleanup Process
+
+```mermaid
+sequenceDiagram
+    participant CronJob as Cleanup CronJob
+    participant CleanerService as Cleaner Service
+    participant StorageLayer as Storage Layer
+    participant DraftBucket as Draft S3 Bucket
+    
+    Note over CronJob, DraftBucket: Daily Cleanup Process (2 AM UTC)
+    
+    CronJob->>CleanerService: Start Cleanup Process
+    CleanerService->>StorageLayer: ListExpiredObjects()
+    StorageLayer->>DraftBucket: List Objects with Metadata
+    DraftBucket-->>StorageLayer: Object List + Timestamps
+    
+    loop For Each Expired Object
+        StorageLayer-->>CleanerService: Expired Object Info
+        CleanerService->>StorageLayer: DeleteObject(object_name)
+        StorageLayer->>DraftBucket: Delete Object
+        DraftBucket-->>StorageLayer: Delete Success
+        StorageLayer-->>CleanerService: Deletion Confirmed
+    end
+    
+    CleanerService-->>CronJob: Cleanup Complete
+    Note right of CleanerService: Log: "Cleaned up N expired objects"
+```
+
+### Error Handling Flow
+
+```mermaid
+flowchart TD
+    A[Client Request] --> B{Valid Request?}
+    B -->|No| C[Return 400 Bad Request]
+    B -->|Yes| D{AWS Credentials Valid?}
+    D -->|No| E[Return 500 Internal Error]
+    D -->|Yes| F{S3 Bucket Exists?}
+    F -->|No| G[Return 404 Not Found]
+    F -->|Yes| H{Object Exists? (for download/confirm)}
+    H -->|No| I[Return 404 Object Not Found]
+    H -->|Yes| J[Process Request]
+    J --> K{Operation Success?}
+    K -->|No| L[Return 500 Internal Error]
+    K -->|Yes| M[Return Success Response]
+    
+    C --> N[Log Error]
+    E --> N
+    G --> N
+    I --> N
+    L --> N
+    M --> O[Log Success]
+```
+
+### Deployment Flow
+
+```mermaid
+flowchart TB
+    subgraph "Development"
+        A[Code Changes]
+        B[Build Docker Images]
+        C[Push to Registry]
+    end
+    
+    subgraph "Kubernetes Cluster"
+        D[Apply Manifests]
+        E[Rolling Update]
+        F[Health Checks]
+        G[Service Ready]
+    end
+    
+    subgraph "Monitoring"
+        H[Pod Status]
+        I[Resource Usage]
+        J[Application Logs]
+        K[CronJob Status]
+    end
+    
+    A --> B
+    B --> C
+    C --> D
+    D --> E
+    E --> F
+    F --> G
+    
+    G --> H
+    G --> I
+    G --> J
+    G --> K
+    
+    style A fill:#e1f5fe
+    style G fill:#c8e6c9
+    style H fill:#fff3e0
+    style I fill:#fff3e0
+    style J fill:#fff3e0
+    style K fill:#fff3e0
+```
 
 ## 📋 Prerequisites
 
@@ -425,11 +737,3 @@ kubectl get jobs -n draftstore
 # Test connectivity
 kubectl exec -it deployment/draftstore-server -n draftstore -- wget -O- http://localhost:8080/health
 ```
-
-## 📝 License
-
-[Add your license information here]
-
-## 🤝 Contributing
-
-[Add contribution guidelines here]
