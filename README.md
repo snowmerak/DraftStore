@@ -480,7 +480,6 @@ metadata:
   namespace: draftstore
 data:
   BUCKET_NAME: "main"
-  AWS_REGION: "us-east-1"
   GRPC_PORT: "50051"
   HTTP_PORT: "8080"
   UPLOAD_TTL: "3600"
@@ -490,7 +489,7 @@ data:
 
 ### 2. Secret for Storage Credentials
 
-**For AWS S3:**
+**For AWS S3 (using stringData - recommended):**
 ```yaml
 # config/secret-aws.yaml
 apiVersion: v1
@@ -499,13 +498,14 @@ metadata:
   name: storage-credentials
   namespace: draftstore
 type: Opaque
-data:
-  STORAGE_TYPE: czM=  # base64 for "s3"
-  AWS_ACCESS_KEY_ID: <base64-encoded-access-key>
-  AWS_SECRET_ACCESS_KEY: <base64-encoded-secret-key>
+stringData:
+  STORAGE_TYPE: "s3"
+  AWS_REGION: "us-east-1"
+  AWS_ACCESS_KEY_ID: "your-access-key"
+  AWS_SECRET_ACCESS_KEY: "your-secret-key"
 ```
 
-**For MinIO:**
+**For MinIO (using stringData - recommended):**
 ```yaml
 # config/secret-minio.yaml
 apiVersion: v1
@@ -514,13 +514,53 @@ metadata:
   name: storage-credentials
   namespace: draftstore
 type: Opaque
+stringData:
+  STORAGE_TYPE: "minio"
+  MINIO_ENDPOINT: "localhost:9000"
+  MINIO_ACCESS_KEY: "minioadmin"
+  MINIO_SECRET_KEY: "minioadmin"
+  MINIO_USE_SSL: "false"
+  MINIO_REGION: "us-east-1"
+```
+
+**Alternative: Using base64 encoded data:**
+```yaml
+# config/secret-aws-base64.yaml (if you prefer base64)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: storage-credentials
+  namespace: draftstore
+type: Opaque
 data:
-  STORAGE_TYPE: bWluaW8=  # base64 for "minio"
-  MINIO_ENDPOINT: <base64-encoded-endpoint>
-  MINIO_ACCESS_KEY: <base64-encoded-access-key>
-  MINIO_SECRET_KEY: <base64-encoded-secret-key>
-  MINIO_USE_SSL: ZmFsc2U=  # base64 for "false"
-  MINIO_REGION: dXMtZWFzdC0x  # base64 for "us-east-1"
+  STORAGE_TYPE: czM=  # base64 for "s3"
+  AWS_REGION: dXMtZWFzdC0x  # base64 for "us-east-1"
+  AWS_ACCESS_KEY_ID: <base64-encoded-access-key>
+  AWS_SECRET_ACCESS_KEY: <base64-encoded-secret-key>
+```
+
+**Creating secrets using kubectl (easiest method):**
+
+For AWS S3:
+```bash
+kubectl create secret generic storage-credentials \
+  --from-literal=STORAGE_TYPE=s3 \
+  --from-literal=AWS_REGION=us-east-1 \
+  --from-literal=AWS_ACCESS_KEY_ID=your-access-key \
+  --from-literal=AWS_SECRET_ACCESS_KEY=your-secret-key \
+  -n draftstore
+```
+
+For MinIO:
+```bash
+kubectl create secret generic storage-credentials \
+  --from-literal=STORAGE_TYPE=minio \
+  --from-literal=MINIO_ENDPOINT=localhost:9000 \
+  --from-literal=MINIO_ACCESS_KEY=minioadmin \
+  --from-literal=MINIO_SECRET_KEY=minioadmin \
+  --from-literal=MINIO_USE_SSL=false \
+  --from-literal=MINIO_REGION=us-east-1 \
+  -n draftstore
 ```
 
 ### 3. Deployment for Server
