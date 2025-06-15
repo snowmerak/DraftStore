@@ -21,10 +21,11 @@ graph TB
     subgraph "Storage Layer"
         StorageInterface[Storage Interface]
         S3Implementation[S3 Implementation]
+        MinIOImplementation[MinIO Implementation]
     end
     
     subgraph "External"
-        S3Bucket[AWS S3 Buckets]
+        S3Bucket[AWS S3 / MinIO Buckets]
     end
     
     gRPCController --> DraftService
@@ -32,7 +33,9 @@ graph TB
     DraftService --> StorageInterface
     CleanerService --> StorageInterface
     StorageInterface --> S3Implementation
+    StorageInterface --> MinIOImplementation
     S3Implementation --> S3Bucket
+    MinIOImplementation --> S3Bucket
 ```
 
 ### Use Case Diagram
@@ -79,7 +82,8 @@ DraftStore/
 ├── gen/                      # Generated code
 ├── lib/                      # Core library components
 │   ├── storage/             # Storage abstraction layer
-│   │   └── s3/             # AWS S3 implementation
+│   │   ├── s3/             # AWS S3 implementation
+│   │   └── minio/          # MinIO implementation
 │   ├── service/            # Business logic services
 │   │   ├── draft/          # Draft upload service
 │   │   └── cleaner/        # Cleanup service
@@ -100,6 +104,7 @@ DraftStore/
 #### 1. Storage Layer (`lib/storage/`)
 - **Interface**: Abstract storage interface for cloud provider flexibility
 - **S3 Implementation**: AWS S3-specific implementation with presigned URLs
+- **MinIO Implementation**: MinIO-compatible implementation with presigned URLs
 - **Operations**: Bucket management, object operations, cleanup
 
 #### 2. Services (`lib/service/`)
@@ -121,7 +126,7 @@ DraftStore/
 - **Automatic Cleanup**: Configurable cleanup of expired draft objects
 - **Dual APIs**: Both gRPC and REST APIs available
 - **Cloud Native**: Designed for Kubernetes deployment
-- **Storage Agnostic**: Interface-based design allows different storage backends
+- **Storage Agnostic**: Interface-based design supports both AWS S3 and MinIO backends
 
 ## 📊 Workflow Diagrams
 
@@ -131,8 +136,8 @@ DraftStore/
 sequenceDiagram
     participant Client
     participant DraftStore
-    participant DraftBucket as Draft S3 Bucket
-    participant MainBucket as Main S3 Bucket
+    participant DraftBucket as Draft Storage Bucket
+    participant MainBucket as Main Storage Bucket
     
     Note over Client, MainBucket: Two-Stage Upload Process
     
@@ -176,13 +181,13 @@ sequenceDiagram
     participant gRPCServer as gRPC Server
     participant DraftService as Draft Service
     participant StorageLayer as Storage Layer
-    participant S3 as AWS S3
+    participant Storage as AWS S3 / MinIO
     
     gRPCClient->>gRPCServer: CreateDraftBucket()
     gRPCServer->>DraftService: CreateBucket()
     DraftService->>StorageLayer: CreateBucket()
-    StorageLayer->>S3: CreateBucket API
-    S3-->>StorageLayer: Success
+    StorageLayer->>Storage: CreateBucket API
+    Storage-->>StorageLayer: Success
     StorageLayer-->>DraftService: Success
     DraftService-->>gRPCServer: BucketCreated
     gRPCServer-->>gRPCClient: CreateDraftBucketResponse
@@ -190,19 +195,19 @@ sequenceDiagram
     gRPCClient->>gRPCServer: GetUploadURL(object_name)
     gRPCServer->>DraftService: GenerateUploadURL()
     DraftService->>StorageLayer: GetPresignedURL()
-    StorageLayer->>S3: Generate Presigned URL
-    S3-->>StorageLayer: Presigned URL
+    StorageLayer->>Storage: Generate Presigned URL
+    Storage-->>StorageLayer: Presigned URL
     StorageLayer-->>DraftService: URL + Metadata
     DraftService-->>gRPCServer: UploadURLResponse
     gRPCServer-->>gRPCClient: GetUploadURLResponse
     
-    Note over gRPCClient, S3: Direct upload to S3 (bypassing server)
+    Note over gRPCClient, Storage: Direct upload to storage (bypassing server)
     
     gRPCClient->>gRPCServer: ConfirmUpload(object_name)
     gRPCServer->>DraftService: ConfirmUpload()
     DraftService->>StorageLayer: MoveObject()
-    StorageLayer->>S3: Copy + Delete Operations
-    S3-->>StorageLayer: Success
+    StorageLayer->>Storage: Copy + Delete Operations
+    Storage-->>StorageLayer: Success
     StorageLayer-->>DraftService: Success
     DraftService-->>gRPCServer: UploadConfirmed
     gRPCServer-->>gRPCClient: ConfirmUploadResponse
@@ -215,7 +220,7 @@ sequenceDiagram
     participant CronJob as Cleanup CronJob
     participant CleanerService as Cleaner Service
     participant StorageLayer as Storage Layer
-    participant DraftBucket as Draft S3 Bucket
+    participant DraftBucket as Draft Storage Bucket
     
     Note over CronJob, DraftBucket: Daily Cleanup Process (2 AM UTC)
     
@@ -242,11 +247,11 @@ sequenceDiagram
 flowchart TD
     A[Client Request] --> B{Valid Request?}
     B -->|No| C[Return 400 Bad Request]
-    B -->|Yes| D{AWS Credentials Valid?}
+    B -->|Yes| D{Storage Credentials Valid?}
     D -->|No| E[Return 500 Internal Error]
     D -->|Yes| F{S3 Bucket Exists?}
     F -->|No| G[Return 404 Not Found]
-    F -->|Yes| H{Object Exists? (for download/confirm)}
+    F -->|Yes| H{Object Exists for download or confirm?}
     H -->|No| I[Return 404 Object Not Found]
     H -->|Yes| J[Process Request]
     J --> K{Operation Success?}
@@ -308,7 +313,7 @@ flowchart TB
 ## 📋 Prerequisites
 
 - Go 1.24.4+
-- AWS Account with S3 access
+- AWS Account with S3 access OR MinIO server
 - Docker (for containerized deployment)
 - Kubernetes cluster (for production deployment)
 - Buf CLI (for protocol buffer generation)
@@ -333,11 +338,24 @@ flowchart TB
    go tool buf generate
    ```
 
-4. **Set up AWS credentials**
+4. **Set up storage credentials**
+
+   **For AWS S3:**
    ```bash
    export AWS_ACCESS_KEY_ID=your-access-key
    export AWS_SECRET_ACCESS_KEY=your-secret-key
    export AWS_REGION=us-east-1
+   export STORAGE_TYPE=s3
+   ```
+
+   **For MinIO:**
+   ```bash
+   export MINIO_ENDPOINT=localhost:9000
+   export MINIO_ACCESS_KEY=minioadmin
+   export MINIO_SECRET_KEY=minioadmin
+   export MINIO_USE_SSL=false
+   export MINIO_REGION=us-east-1
+   export STORAGE_TYPE=minio
    ```
 
 5. **Configure environment variables**
@@ -352,6 +370,43 @@ flowchart TB
 6. **Run the server**
    ```bash
    go run cmd/server/main.go
+   ```
+
+### MinIO Local Development Setup
+
+If you want to develop locally with MinIO instead of AWS S3, you can run MinIO in a Docker container:
+
+1. **Start MinIO server**
+   ```bash
+   docker run -d \
+     -p 9000:9000 \
+     -p 9001:9001 \
+     --name minio \
+     -e "MINIO_ROOT_USER=minioadmin" \
+     -e "MINIO_ROOT_PASSWORD=minioadmin" \
+     -v /tmp/minio-data:/data \
+     minio/minio server /data --console-address ":9001"
+   ```
+
+2. **Access MinIO Console**
+   - Open http://localhost:9001 in your browser
+   - Login with username: `minioadmin`, password: `minioadmin`
+   - Create buckets as needed
+
+3. **Configure environment for MinIO**
+   ```bash
+   export STORAGE_TYPE=minio
+   export MINIO_ENDPOINT=localhost:9000
+   export MINIO_ACCESS_KEY=minioadmin
+   export MINIO_SECRET_KEY=minioadmin
+   export MINIO_USE_SSL=false
+   export BUCKET_NAME=main
+   ```
+
+4. **Stop MinIO server**
+   ```bash
+   docker stop minio
+   docker rm minio
    ```
 
 ### Building Binaries
@@ -433,19 +488,39 @@ data:
   OBJECT_LIFETIME: "86400"  # 24 hours
 ```
 
-### 2. Secret for AWS Credentials
+### 2. Secret for Storage Credentials
 
+**For AWS S3:**
 ```yaml
-# config/secret.yaml
+# config/secret-aws.yaml
 apiVersion: v1
 kind: Secret
 metadata:
-  name: aws-credentials
+  name: storage-credentials
   namespace: draftstore
 type: Opaque
 data:
+  STORAGE_TYPE: czM=  # base64 for "s3"
   AWS_ACCESS_KEY_ID: <base64-encoded-access-key>
   AWS_SECRET_ACCESS_KEY: <base64-encoded-secret-key>
+```
+
+**For MinIO:**
+```yaml
+# config/secret-minio.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: storage-credentials
+  namespace: draftstore
+type: Opaque
+data:
+  STORAGE_TYPE: bWluaW8=  # base64 for "minio"
+  MINIO_ENDPOINT: <base64-encoded-endpoint>
+  MINIO_ACCESS_KEY: <base64-encoded-access-key>
+  MINIO_SECRET_KEY: <base64-encoded-secret-key>
+  MINIO_USE_SSL: ZmFsc2U=  # base64 for "false"
+  MINIO_REGION: dXMtZWFzdC0x  # base64 for "us-east-1"
 ```
 
 ### 3. Deployment for Server
@@ -479,7 +554,7 @@ spec:
         - configMapRef:
             name: draftstore-config
         - secretRef:
-            name: aws-credentials
+            name: storage-credentials
         resources:
           requests:
             memory: "128Mi"
@@ -545,7 +620,7 @@ spec:
             - configMapRef:
                 name: draftstore-config
             - secretRef:
-                name: aws-credentials
+                name: storage-credentials
             resources:
               requests:
                 memory: "64Mi"
@@ -572,16 +647,127 @@ kubectl get services -n draftstore
 kubectl get cronjobs -n draftstore
 ```
 
+### 7. MinIO in Kubernetes (Alternative to AWS S3)
+
+If you prefer to run MinIO within your Kubernetes cluster instead of using AWS S3:
+
+**MinIO Deployment:**
+```yaml
+# deploy/minio-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minio
+  namespace: draftstore
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: minio
+  template:
+    metadata:
+      labels:
+        app: minio
+    spec:
+      containers:
+      - name: minio
+        image: minio/minio:latest
+        command:
+        - /bin/bash
+        - -c
+        args:
+        - minio server /data --console-address :9001
+        env:
+        - name: MINIO_ROOT_USER
+          value: "minioadmin"
+        - name: MINIO_ROOT_PASSWORD
+          value: "minioadmin"
+        ports:
+        - containerPort: 9000
+        - containerPort: 9001
+        volumeMounts:
+        - name: data
+          mountPath: /data
+      volumes:
+      - name: data
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio-service
+  namespace: draftstore
+spec:
+  selector:
+    app: minio
+  ports:
+  - name: api
+    port: 9000
+    targetPort: 9000
+  - name: console
+    port: 9001
+    targetPort: 9001
+  type: ClusterIP
+```
+
+**Deploy MinIO:**
+```bash
+kubectl apply -f deploy/minio-deployment.yaml
+
+# Check MinIO status
+kubectl get pods -l app=minio -n draftstore
+```
+
+**Update storage credentials for MinIO:**
+```bash
+# Create MinIO credentials secret
+kubectl create secret generic storage-credentials \
+  --from-literal=STORAGE_TYPE=minio \
+  --from-literal=MINIO_ENDPOINT=minio-service:9000 \
+  --from-literal=MINIO_ACCESS_KEY=minioadmin \
+  --from-literal=MINIO_SECRET_KEY=minioadmin \
+  --from-literal=MINIO_USE_SSL=false \
+  --from-literal=MINIO_REGION=us-east-1 \
+  -n draftstore
+```
+
+### 8. Verify and Test
+
+After deployment, verify that all components are running correctly:
+
+```bash
+# Check all pods
+kubectl get pods -n draftstore
+
+# Check services
+kubectl get services -n draftstore
+
+# Check cronjobs
+kubectl get cronjobs -n draftstore
+
+# Test gRPC and HTTP APIs
+# (use appropriate client or curl commands)
+```
+
 ## 🔧 Configuration
 
 ### Environment Variables
 
 | Variable | Description | Default | Required |
 |----------|-------------|---------|----------|
-| `BUCKET_NAME` | Main S3 bucket name | `main` | ✅ |
-| `AWS_REGION` | AWS region | `us-east-1` | ✅ |
-| `AWS_ACCESS_KEY_ID` | AWS access key | - | ✅ |
-| `AWS_SECRET_ACCESS_KEY` | AWS secret key | - | ✅ |
+| `STORAGE_TYPE` | Storage backend type (`s3` or `minio`) | `s3` | ✅ |
+| `BUCKET_NAME` | Main bucket name | `main` | ✅ |
+| **AWS S3 Configuration** |
+| `AWS_REGION` | AWS region | `us-east-1` | ✅ (for S3) |
+| `AWS_ACCESS_KEY_ID` | AWS access key | - | ✅ (for S3) |
+| `AWS_SECRET_ACCESS_KEY` | AWS secret key | - | ✅ (for S3) |
+| **MinIO Configuration** |
+| `MINIO_ENDPOINT` | MinIO server endpoint | `localhost:9000` | ✅ (for MinIO) |
+| `MINIO_ACCESS_KEY` | MinIO access key | `minioadmin` | ✅ (for MinIO) |
+| `MINIO_SECRET_KEY` | MinIO secret key | `minioadmin` | ✅ (for MinIO) |
+| `MINIO_USE_SSL` | Use SSL for MinIO connection | `false` | ❌ (for MinIO) |
+| `MINIO_REGION` | MinIO region | `us-east-1` | ❌ (for MinIO) |
+| **Server Configuration** |
 | `GRPC_PORT` | gRPC server port | `50051` | ❌ |
 | `HTTP_PORT` | HTTP server port | `8080` | ❌ |
 | `UPLOAD_TTL` | Upload URL TTL (seconds) | `3600` | ❌ |
@@ -656,10 +842,45 @@ curl -X POST http://localhost:8080/api/v1/confirm-upload \
 
 ### Common Issues
 
-1. **AWS Credentials**: Ensure proper IAM permissions for S3 operations
-2. **Bucket Names**: Must be globally unique in S3
-3. **Network Policies**: Ensure pods can reach S3 endpoints
+**General:**
+1. **Storage Credentials**: Ensure proper credentials and permissions
+2. **Bucket Names**: Must be globally unique (for S3) or valid bucket names (for MinIO)
+3. **Network Policies**: Ensure pods can reach storage endpoints
 4. **Resource Limits**: Adjust based on traffic patterns
+
+**AWS S3 Specific:**
+1. **IAM Permissions**: Ensure proper IAM permissions for S3 operations:
+   ```json
+   {
+     "Version": "2012-10-17",
+     "Statement": [
+       {
+         "Effect": "Allow",
+         "Action": [
+           "s3:CreateBucket",
+           "s3:GetObject",
+           "s3:PutObject",
+           "s3:DeleteObject",
+           "s3:ListBucket"
+         ],
+         "Resource": [
+           "arn:aws:s3:::your-bucket-name",
+           "arn:aws:s3:::your-bucket-name/*"
+         ]
+       }
+     ]
+   }
+   ```
+
+**MinIO Specific:**
+1. **Endpoint Configuration**: Ensure MinIO endpoint is accessible from pods
+2. **SSL Configuration**: Set `MINIO_USE_SSL=false` for non-HTTPS MinIO
+3. **Service Discovery**: Use service names for in-cluster MinIO (e.g., `minio-service:9000`)
+4. **Bucket Creation**: MinIO may require manual bucket creation via console
+
+**Storage Type Configuration:**
+- Ensure `STORAGE_TYPE` environment variable is set to either `s3` or `minio`
+- Verify that the appropriate credentials are provided for the selected storage type
 
 ### Debug Commands
 
@@ -670,6 +891,59 @@ kubectl logs -l app=draftstore-server -n draftstore
 # Check cronjob history
 kubectl get jobs -n draftstore
 
-# Test connectivity
+# Test application health
 kubectl exec -it deployment/draftstore-server -n draftstore -- wget -O- http://localhost:8080/health
+
+# For MinIO debugging
+# Check MinIO pod status
+kubectl get pods -l app=minio -n draftstore
+
+# Check MinIO logs
+kubectl logs -l app=minio -n draftstore
+
+# Test MinIO connectivity from DraftStore pod
+kubectl exec -it deployment/draftstore-server -n draftstore -- nc -zv minio-service 9000
+
+# Access MinIO console (if using port-forward)
+kubectl port-forward service/minio-service 9001:9001 -n draftstore
+# Then open http://localhost:9001
+
+# For AWS S3 debugging
+# Test AWS credentials and S3 access
+kubectl exec -it deployment/draftstore-server -n draftstore -- env | grep AWS
+
+# Check storage configuration
+kubectl get secret storage-credentials -n draftstore -o yaml
 ```
+
+## 📊 Storage Backend Comparison
+
+### AWS S3 vs MinIO
+
+| Feature | AWS S3 | MinIO |
+|---------|--------|-------|
+| **Deployment** | Managed service | Self-hosted |
+| **Cost** | Pay-per-use | Infrastructure costs only |
+| **Scalability** | Unlimited | Limited by hardware |
+| **Durability** | 99.999999999% (11 9's) | Depends on setup |
+| **Availability** | 99.99% SLA | Depends on setup |
+| **Geographic Distribution** | Multiple regions/AZs | Single cluster |
+| **Compliance** | SOC, PCI, HIPAA, etc. | Self-managed |
+| **Setup Complexity** | Minimal (credentials only) | Moderate (deployment required) |
+| **Development** | Requires AWS account | Local development friendly |
+| **Backup/DR** | Built-in features | Manual configuration |
+
+### When to Choose AWS S3
+- Production environments requiring high availability
+- Applications with unpredictable storage needs
+- Compliance requirements (healthcare, finance)
+- Global distribution requirements
+- Minimal operational overhead preferred
+
+### When to Choose MinIO
+- Development and testing environments
+- On-premises or private cloud deployments
+- Cost-sensitive applications with predictable usage
+- Air-gapped or restricted network environments
+- Full control over data locality required
+- Learning S3 API without AWS costs
