@@ -119,10 +119,24 @@ func main() {
 	log.Printf("Configuration: StorageType=%s, Bucket=%s, gRPC=%s, HTTP=%s",
 		cfg.StorageType, cfg.BucketName, cfg.GRPCPort, cfg.HTTPPort)
 
-	if cfg.StorageType == "s3" {
-		log.Printf("Using AWS S3 with region: %s", cfg.AWSRegion)
-	} else if cfg.StorageType == "minio" {
-		log.Printf("Using MinIO with endpoint: %s", cfg.MinIOEndpoint)
+	switch cfg.StorageType {
+	case "s3":
+		log.Printf("AWS S3 region: %s", cfg.AWSRegion)
+	case "minio":
+		log.Printf("MinIO endpoint: %s, access key: %s, use SSL: %t, region: %s",
+			cfg.MinIOEndpoint, cfg.MinIOAccessKey, cfg.MinIOUseSSL, cfg.MinIORegion)
+	default:
+		log.Fatalf("Unsupported storage type: %s", cfg.StorageType)
+		log.Printf("Using default storage type: s3")
+		cfg.StorageType = "s3"
+		cfg.AWSRegion = "us-east-1"
+		cfg.BucketName = "main"
+		cfg.GRPCPort = "50051"
+		cfg.HTTPPort = "8080"
+		cfg.UploadTTL = 3600 * time.Second
+		cfg.DownloadTTL = 3600 * time.Second
+		log.Printf("Default configuration: StorageType=s3, Bucket=main, gRPC=50051, HTTP=8080, UploadTTL=3600s, DownloadTTL=3600s")
+		log.Printf("Please set the environment variables to configure the server.")
 	}
 
 	// Initialize storage client
