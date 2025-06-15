@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"strconv"
 	"time"
@@ -12,6 +11,7 @@ import (
 	"github.com/snowmerak/DraftStore/lib/storage"
 	"github.com/snowmerak/DraftStore/lib/storage/minio"
 	"github.com/snowmerak/DraftStore/lib/storage/s3"
+	"github.com/snowmerak/DraftStore/lib/util/logger"
 )
 
 type Config struct {
@@ -76,12 +76,22 @@ func getDurationEnv(key string, defaultValue int64) time.Duration {
 }
 
 func createStorageClient(cfg *Config) (storage.Storage, error) {
+	log := logger.GetServiceLogger("storage")
+
 	switch cfg.StorageType {
 	case "s3":
+		log.Info().
+			Str("region", cfg.AWSRegion).
+			Msg("Creating S3 storage client")
 		return s3.NewClient(s3.ClientOptions{
 			Region: cfg.AWSRegion,
 		})
 	case "minio":
+		log.Info().
+			Str("endpoint", cfg.MinIOEndpoint).
+			Str("region", cfg.MinIORegion).
+			Bool("use_ssl", cfg.MinIOUseSSL).
+			Msg("Creating MinIO storage client")
 		return minio.NewClient(minio.ClientOptions{
 			Endpoint:        cfg.MinIOEndpoint,
 			AccessKeyID:     cfg.MinIOAccessKey,
@@ -90,50 +100,80 @@ func createStorageClient(cfg *Config) (storage.Storage, error) {
 			Region:          cfg.MinIORegion,
 		})
 	default:
+		log.Error().
+			Str("storage_type", cfg.StorageType).
+			Msg("Unsupported storage type")
 		return nil, fmt.Errorf("unsupported storage type: %s", cfg.StorageType)
 	}
 }
 
 func main() {
+	startTime := time.Now()
+	log := logger.GetServiceLogger("cleanup-job")
+
 	// Load configuration
 	cfg := loadConfig()
 
-	log.Printf("Starting DraftStore cleanup job...")
-	log.Printf("Configuration: StorageType=%s, Bucket=%s, ObjectLifetime=%v",
-		cfg.StorageType, cfg.BucketName, cfg.ObjectLifetime)
+	// Log startup information
+	logger.LogStartup("cleanup-job", map[string]interface{}{
+		"storage_type":    cfg.StorageType,
+		"bucket_name":     cfg.BucketName,
+		"object_lifetime": cfg.ObjectLifetime.String(),
+	})
 
 	if cfg.StorageType == "s3" {
-		log.Printf("Using AWS S3 with region: %s", cfg.AWSRegion)
+		log.Info().
+			Str("region", cfg.AWSRegion).
+			Msg("Using AWS S3 storage backend")
 	} else if cfg.StorageType == "minio" {
-		log.Printf("Using MinIO with endpoint: %s", cfg.MinIOEndpoint)
+		log.Info().
+			Str("endpoint", cfg.MinIOEndpoint).
+			Msg("Using MinIO storage backend")
 	}
 
 	// Initialize storage client
+	log.Info().Msg("Initializing storage client")
 	storageClient, err := createStorageClient(cfg)
 	if err != nil {
-		log.Fatalf("Failed to create storage client: %v", err)
+		log.Fatal().
+			Err(err).
+			Str("storage_type", cfg.StorageType).
+			Msg("Failed to create storage client")
 	}
+	log.Info().
+		Str("storage_type", cfg.StorageType).
+		Msg("Storage client initialized successfully")
 
 	// Initialize cleaner service
+	log.Info().Msg("Initializing cleaner service")
 	cleanerService, err := cleaner.NewService(cleaner.ServiceOptions{
 		BucketName:     cfg.BucketName,
 		ObjectLifetime: cfg.ObjectLifetime,
 		Storage:        storageClient,
 	})
 	if err != nil {
-		log.Fatalf("Failed to create cleaner service: %v", err)
+		log.Fatal().
+			Err(err).
+			Msg("Failed to create cleaner service")
 	}
+	log.Info().Msg("Cleaner service initialized successfully")
 
 	// Run cleanup once and exit (designed for Kubernetes Job)
-	log.Printf("Running cleanup job...")
+	log.Info().Msg("Starting cleanup operation")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
 	if err := cleanerService.CleanupDrafts(ctx); err != nil {
-		log.Fatalf("Cleanup failed: %v", err)
+		log.Fatal().
+			Err(err).
+			Msg("Cleanup operation failed")
 	}
 
-	log.Printf("Cleanup completed successfully")
-	log.Printf("Job finished, exiting...")
+	log.Info().
+		Dur("duration", time.Since(startTime)).
+		Msg("Cleanup operation completed successfully")
+
+	// Log shutdown information
+	logger.LogShutdown("cleanup-job", time.Since(startTime))
 }

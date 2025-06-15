@@ -11,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
 	"github.com/snowmerak/DraftStore/lib/storage"
+	"github.com/snowmerak/DraftStore/lib/util/logger"
 )
 
 var _ storage.Storage = (*Client)(nil)
@@ -26,6 +27,12 @@ type ClientOptions struct {
 }
 
 func NewClient(opts ClientOptions) (*Client, error) {
+	log := logger.GetServiceLogger("s3-storage")
+
+	log.Info().
+		Str("region", opts.Region).
+		Msg("Initializing S3 storage client")
+
 	var cfg aws.Config
 	var err error
 
@@ -34,6 +41,9 @@ func NewClient(opts ClientOptions) (*Client, error) {
 	} else {
 		cfg, err = config.LoadDefaultConfig(context.TODO())
 		if err != nil {
+			log.Error().
+				Err(err).
+				Msg("Failed to load default AWS config")
 			return nil, err
 		}
 	}
@@ -44,6 +54,10 @@ func NewClient(opts ClientOptions) (*Client, error) {
 
 	client := s3.NewFromConfig(cfg)
 	presigner := s3.NewPresignClient(client)
+
+	log.Info().
+		Str("region", cfg.Region).
+		Msg("S3 storage client initialized successfully")
 
 	return &Client{
 		client:    client,

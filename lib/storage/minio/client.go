@@ -7,6 +7,7 @@ import (
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 	"github.com/snowmerak/DraftStore/lib/storage"
+	"github.com/snowmerak/DraftStore/lib/util/logger"
 )
 
 var _ storage.Storage = (*Client)(nil)
@@ -25,6 +26,14 @@ type ClientOptions struct {
 }
 
 func NewClient(opts ClientOptions) (*Client, error) {
+	log := logger.GetServiceLogger("minio-storage")
+
+	log.Info().
+		Str("endpoint", opts.Endpoint).
+		Str("region", opts.Region).
+		Bool("use_ssl", opts.UseSSL).
+		Msg("Initializing MinIO storage client")
+
 	var client *minio.Client
 	var err error
 
@@ -39,8 +48,17 @@ func NewClient(opts ClientOptions) (*Client, error) {
 	}
 
 	if err != nil {
+		log.Error().
+			Err(err).
+			Str("endpoint", opts.Endpoint).
+			Msg("Failed to create MinIO client")
 		return nil, err
 	}
+
+	log.Info().
+		Str("endpoint", opts.Endpoint).
+		Str("region", opts.Region).
+		Msg("MinIO storage client initialized successfully")
 
 	return &Client{
 		client: client,
